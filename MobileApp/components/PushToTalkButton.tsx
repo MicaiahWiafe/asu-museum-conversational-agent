@@ -59,7 +59,10 @@ export function PushToTalkButton({
   };
 
   const handleUpOrCancel = (e: React.PointerEvent) => {
-    if (disabled) return;
+    // Releases must ALWAYS fire if we previously armed a press, even if
+    // the parent has since disabled the button (e.g. state flipped to
+    // "connecting" during async setup). Dropping the release here would
+    // leave the app stuck listening with no matching end_turn.
     e.preventDefault();
     if (!armed.current) return;
     armed.current = false;

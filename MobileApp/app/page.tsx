@@ -50,6 +50,11 @@ export default function Page() {
   const captureRef = useRef<MicCapture | null>(null);
   const playerRef = useRef<StreamingPlayer | null>(null);
   const turnStartedRef = useRef(false);
+  // True between handlePressStart and handlePressEnd. Lets the (async)
+  // start path detect a release that arrived before mic capture was wired
+  // up, so it can tear down whatever it set up instead of leaving the app
+  // stuck listening forever.
+  const isPressingRef = useRef(false);
 
   // --- Boot: load artworks + restore last-selected from localStorage. ---
   useEffect(() => {
@@ -160,6 +165,8 @@ export default function Page() {
   }, [selectedId]);
 
   const handlePressStart = useCallback(async () => {
+    isPressingRef.current = true;
+
     // Recover from prior error: drop stale session so we reconnect cleanly.
     if (state === "error") {
       sessionRef.current?.close();
@@ -170,19 +177,43 @@ export default function Page() {
     // barge-in: works whether we were idle, speaking, or thinking).
     playerRef.current?.flush();
     setTranscript("");
+
     try {
+      // Phase 1 — open the WebSocket. May take a few hundred ms first time.
       await ensureConnected();
+      if (!isPressingRef.current) {
+        // Released before the socket was ready. Nothing was sent to Gemini
+        // yet (no startTurn), so just bail.
+        return;
+      }
       setState("listening");
 
+      // Phase 2 — open the turn. From this point on, we owe Gemini a
+      // matching activity_end no matter what.
       sessionRef.current?.startTurn();
 
+      // Phase 3 — wire the mic. getUserMedia + AudioWorklet load can race
+      // with a fast release; check before flipping turnStarted=true.
       const cap = new MicCapture();
-      captureRef.current = cap;
-      turnStartedRef.current = true;
       await cap.start({
         onChunk: (chunk) => sessionRef.current?.sendAudio(chunk),
         onLevel: (rms) => setMicLevel(rms),
       });
+      if (!isPressingRef.current) {
+        // Released during mic setup. Tear down silently and commit the
+        // (mostly empty) turn so Gemini's session state stays consistent.
+        try {
+          await cap.stop();
+        } catch {
+          /* ignore */
+        }
+        setMicLevel(0);
+        sessionRef.current?.endTurn();
+        setState("thinking");
+        return;
+      }
+      captureRef.current = cap;
+      turnStartedRef.current = true;
     } catch (e) {
       setErrMsg(friendlyError(e));
       setState("error");
@@ -192,6 +223,10 @@ export default function Page() {
   }, [ensureConnected, state]);
 
   const handlePressEnd = useCallback(async () => {
+    isPressingRef.current = false;
+    // If the start path is still mid-setup, it will see the cleared
+    // isPressingRef on its next checkpoint and tear itself down. Nothing
+    // for us to do here.
     if (!turnStartedRef.current) return;
     turnStartedRef.current = false;
     try {
@@ -205,6 +240,13 @@ export default function Page() {
     setState("thinking");
   }, []);
 
+  // The button is disabled while the system is mid-response ("thinking")
+  // so the visitor doesn't accidentally queue duplicate turns. NOT disabled
+  // during "connecting" — the press is already in flight by then, and
+  // disabling would drop the matching release event in PushToTalkButton.
+  // Listening and speaking remain interactive (release / barge-in).
+  const buttonDisabled = !selectedId || state === "thinking";
+
   // --- Desktop convenience: hold space bar to talk. ---
   useEffect(() => {
     const isTypingTarget = (t: EventTarget | null) =>
@@ -216,7 +258,10 @@ export default function Page() {
     const onDown = (e: KeyboardEvent) => {
       if (e.code !== "Space" || e.repeat) return;
       if (isTypingTarget(e.target)) return;
-      if (!selectedId) return;
+      // Mirror the button's disabled gate. Without this, space would
+      // start a fresh turn while one is already mid-response, overlapping
+      // turns the UI explicitly prevents via pointer.
+      if (buttonDisabled) return;
       e.preventDefault();
       handlePressStart();
     };
@@ -231,17 +276,12 @@ export default function Page() {
       window.removeEventListener("keydown", onDown);
       window.removeEventListener("keyup", onUp);
     };
-  }, [handlePressStart, handlePressEnd, selectedId]);
+  }, [handlePressStart, handlePressEnd, buttonDisabled]);
 
   const currentArtwork = useMemo(
     () => artworks.find((x) => x.id === selectedId) ?? null,
     [artworks, selectedId],
   );
-
-  // The button is disabled while the system is mid-response (thinking) so
-  // the visitor doesn't accidentally queue duplicate turns. Listening and
-  // speaking remain interactive (release / barge-in respectively).
-  const buttonDisabled = !selectedId || state === "connecting" || state === "thinking";
 
   return (
     <div className="min-h-[100dvh] flex flex-col">
