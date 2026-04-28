@@ -1,0 +1,19 @@
+## Overview
+
+Created in 1987, *Tamalada* is one of Carmen Lomas Garza’s most beloved and widely recognized artworks. Painted in gouache, this piece beautifully encapsulates the artist’s dedication to documenting the everyday traditions of Mexican American life. The painting captures a bustling, joyful scene of an extended family working together to make tamales, a labor-intensive and deeply cherished culinary tradition. This artwork serves as a vibrant visual archive of cooperation, familial love, and the preservation of culture through shared labor.
+
+## What you see
+
+The artwork invites you into a brightly lit, lively kitchen and dining space packed with activity. The composition is highly detailed and narrative, structured around the collective effort of preparing tamales. You see multiple generations of a family, from older adults to young children, positioned around a large table and throughout the room, functioning almost like a loving assembly line. Some figures are focused on spreading masa onto corn husks, others are preparing the meat fillings, and pots are simmering on the stove in the background. The room is warmly decorated, reflecting a typical domestic interior, complete with a framed reproduction of the Last Supper hanging prominently on the wall. Every element, from the patterned floors to the specific posture of the individuals working, is rendered with Garza's signature meticulous attention to detail and vibrant, flat fields of color.
+
+## Cultural and historical context
+
+The *tamalada*—the event of gathering to make tamales—is a cornerstone of Mexican and Mexican American cultural life, traditionally occurring during the Christmas season and other significant holidays. Because tamales require many steps to prepare, the process necessitates many hands, transforming a cooking chore into a vital social event. It is during these gatherings that oral histories, community gossip, and cultural values are passed down from older generations to the youth. By the late 1980s, as many communities were facing the pressures of assimilation, traditions like the *tamalada* remained a powerful anchor of identity. Garza's depiction elevates this domestic ritual to a subject of historical importance, ensuring it is recorded with the dignity it deserves.
+
+## Artist's intent and technique
+
+Garza’s intent with this piece is explicitly educational and healing. She created *Tamalada* to share the beauty and warmth of her culture with mainstream America, while simultaneously providing a mirror in which Mexican Americans could see their own lives validated and celebrated in fine art. She utilizes her signature *monitos* style—intimate scale, narrative clarity, and gouache on paper—to draw the viewer into the scene. The lack of traditional linear perspective and the equal attention given to every corner of the room encourage the eye to wander, discovering small interactions and details that give the piece its profound sense of intimacy and nostalgia. 
+
+## Why this matters in the exhibition
+
+In the context of the "Picturing the Familiar" exhibition, *Tamalada* stands as a quintessential example of Garza’s overarching mission. It perfectly illustrates her ability to transform personal memory into a collective cultural monument. The artwork demonstrates how her practice centers on the family and the home as the primary sites of resistance, resilience, and cultural continuity. For a visitor walking through the ASU Art Museum, this piece acts as a warm invitation to understand Chicano culture not through the lens of political struggle alone, but through the profound, quiet joy of everyday survival and togetherness.

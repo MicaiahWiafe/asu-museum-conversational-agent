@@ -1,0 +1,106 @@
+[
+  {
+    "id": "tamalada",
+    "title": "Tamalada",
+    "artist": "Carmen Lomas Garza",
+    "year": "1987",
+    "medium": "gouache",
+    "description": "A vibrant and detailed painting showing an extended Mexican American family working together in a bustling kitchen to prepare tamales."
+  },
+  {
+    "id": "cumpleanos_de_lala_y_tudi",
+    "title": "Cumpleaños de Lala y Tudi",
+    "artist": "Carmen Lomas Garza",
+    "year": "1991",
+    "medium": "lithograph",
+    "description": "A lively print depicting the joyful chaos of a joint family birthday party happening in a family's backyard."
+  },
+  {
+    "id": "las_pachucas_razor_blade_do",
+    "title": "Las Pachucas, Razor Blade 'do",
+    "artist": "Carmen Lomas Garza",
+    "year": "1993",
+    "medium": "alkyd oil on canvas",
+    "description": "An intimate painting of three young Chicana women in a bedroom, helping each other style an elaborate 'razor blade' hairdo before a night out."
+  },
+  {
+    "id": "heaven_and_hell_ii",
+    "title": "Heaven and Hell II",
+    "artist": "Carmen Lomas Garza",
+    "year": "1991",
+    "medium": "alkyd and oil on canvas",
+    "description": "A split-composition painting contrasting a joyful community dance in a sunlit heaven with a dark underworld of grueling, fiery labor."
+  },
+  {
+    "id": "camas_para_suenos",
+    "title": "Camas para Sueños",
+    "artist": "Carmen Lomas Garza",
+    "year": "1989",
+    "medium": "oil on linen",
+    "description": "A serene nighttime scene showing a mother preparing a bed inside a lit room, while her two young daughters rest and stargaze on the home's roof."
+  },
+  {
+    "id": "lessons",
+    "title": "Lessons",
+    "artist": "Carmen Lomas Garza",
+    "year": "1989",
+    "medium": "lithograph",
+    "description": "A tender print capturing a family of six gathered around the dining table, deeply engaged in drawing and painting together."
+  },
+  {
+    "id": "burning_of_the_codices",
+    "title": "Burning of the Codices",
+    "artist": "Carmen Lomas Garza",
+    "year": "2002",
+    "medium": "acrylic on canvas",
+    "description": "A powerful historical painting depicting the tragic destruction of indigenous Mesoamerican books by Spanish colonizers."
+  },
+  {
+    "id": "curandera",
+    "title": "Curandera",
+    "artist": "Carmen Lomas Garza",
+    "year": "1977",
+    "medium": "gouache on cotton paper",
+    "description": "A respectful depiction of a traditional Mexican American folk healer performing a spiritual and physical cleansing on a sick woman in her bedroom."
+  },
+  {
+    "id": "loteria_primera_tabla",
+    "title": "Lotería-Primera Tabla",
+    "artist": "Carmen Lomas Garza",
+    "year": "1972",
+    "medium": "etching",
+    "description": "An intricate print modeled after a traditional Mexican bingo board, filled with the artist's personal and cultural symbols."
+  },
+  {
+    "id": "don_pedrito_jaramillo_falfurrias_texas_1829_1907",
+    "title": "Don Pedrito Jaramillo, Falfurrias, Texas 1829-1907",
+    "artist": "Carmen Lomas Garza",
+    "year": "1976",
+    "medium": "copper plate etching with paint",
+    "description": "A triptych print honoring the legendary South Texas folk healer Don Pedrito Jaramillo, presented in the style of a religious altarpiece."
+  },
+  {
+    "id": "abuelitos_pizcando_nopalitos",
+    "title": "Abuelitos Pizcando Nopalitos",
+    "artist": "Carmen Lomas Garza",
+    "year": "1980",
+    "medium": "gouache on cotton paper",
+    "description": "A serene early morning scene of an older couple carefully harvesting young prickly pear cactus pads in the South Texas landscape."
+  },
+  {
+    "id": "nopalitos_para_ti",
+    "title": "Nopalitos para ti",
+    "artist": "Carmen Lomas Garza",
+    "year": "Unknown",
+    "medium": "Unknown",
+    "description": "An intimate depiction of the careful, labor-intensive process of cleaning spines from prickly pear cactus pads in a domestic kitchen."
+  },
+  {
+    "id": "raspas_con_nieve",
+    "title": "Raspas con Nieve",
+    "artist": "Carmen Lomas Garza",
+    "year": "1972",
+    "medium": "intaglio print",
+    "description": "A detailed print capturing the nostalgic community experience of gathering around a shaved ice stand on a hot Texas summer day."
+  }
+]

@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(claude-api)",
+      "Skill(claude-api:*)",
+      "Read(//Applications/**)",
+      "Bash(mdfind -name \"Unity Hub\")",
+      "mcp__mcp-registry__search_mcp_registry",
+      "WebFetch(domain:docs.unity3d.com)",
+      "WebSearch",
+      "WebFetch(domain:unity.com)",
+      "Bash(defaults read *)",
+      "Bash(curl -sL \"https://api.github.com/repos/The1Studio/theone-training-skills/contents/.claude/skills\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(i['name']\\) for i in d if isinstance\\(d,list\\)]\")",
+      "Bash(awk '{print $11}')",
+      "Read(//Users/akwesirobot/Library/Logs/**)",
+      "Read(//Users/akwesirobot/Library/**)",
+      "Bash(kill -0 16297)",
+      "Bash(ps -p 16297 -o pid,etime,state,command)",
+      "Bash(kill 16297)",
+      "Bash(mkdir -p \"/tmp/unity-asugallery-logs\")",
+      "Bash(/Applications/Unity/Hub/Editor/6000.4.4f1/Unity.app/Contents/MacOS/Unity -batchmode -nographics -quit -createProject '/Users/akwesirobot/Documents/ASU Museum/Unity/ASUGallery' -cloneFromTemplate '/Users/akwesirobot/Library/Application Support/UnityHub/Templates/com.unity.template.mixed-reality-2.2.3.tgz' -logFile /tmp/unity-asugallery-logs/create.log)",
+      "Bash(/usr/bin/pgrep -f oahd)",
+      "Bash(softwareupdate --install-rosetta --agree-to-license)",
+      "Bash(arch -x86_64 /usr/bin/true)",
+      "Bash(/Applications/Unity/Hub/Editor/6000.4.4f1/Unity.app/Contents/MacOS/Unity -batchmode -nographics -quit -projectPath '/Users/akwesirobot/Documents/ASU Museum/Unity/ASUGallery' -logFile /tmp/unity-asugallery-logs/refresh.log)",
+      "Bash(curl -s \"https://packages.unity.com/com.unity.ai.assistant\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('latest:', d.get\\('dist-tags',{}\\)\\); print\\('versions:', list\\(d.get\\('versions',{}\\).keys\\(\\)\\)[-6:]\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); v=sorted\\(d.get\\('versions',{}\\).keys\\(\\)\\); print\\('\\\\n'.join\\(v\\)\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); v=d['versions']['2.6.0-pre.1']; print\\('unity:', v.get\\('unity'\\), v.get\\('unityRelease'\\)\\); print\\('desc:', v.get\\('description',''\\)[:200]\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('name:', d.get\\('name'\\), 'version:', d.get\\('version'\\), 'unity:', d.get\\('unity'\\)\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('deps:'\\); [print\\(' ',k,v\\) for k,v in d.get\\('dependencies',{}\\).items\\(\\)]\")",
+      "Bash(/Applications/Unity/Hub/Editor/6000.4.4f1/Unity.app/Contents/MacOS/Unity -batchmode -nographics -quit -projectPath '/Users/akwesirobot/Documents/ASU Museum/Unity/ASUGallery' -logFile /tmp/unity-asugallery-logs/compile.log)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f'manifest entries: {len\\(d\\)}'\\); [print\\(' ', e['id'], '—', e['title']\\) for e in d]\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f'artworks.json entries: {len\\(d\\) if isinstance\\(d, list\\) else \\\\\"non-list\\\\\"}'\\)\")",
+      "Bash(python3 -c ' *)"
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+{
+    "name": "ConversationalAgent",
+    "rootNamespace": "ASUMuseum.ConversationalAgent",
+    "references": [
+        "Unity.XR.CoreUtils"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
