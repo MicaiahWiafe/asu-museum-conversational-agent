@@ -1,12 +1,18 @@
 /**
- * Microphone capture → 16 kHz PCM16 chunks.
+ * Microphone capture → 16 kHz PCM16 chunks + live RMS level.
  *
  * Use:
  *   const cap = new MicCapture();
- *   await cap.start((pcm16Chunk) => session.sendAudio(pcm16Chunk));
- *   ...
- *   await cap.stop();
+ *   await cap.start({
+ *     onChunk: (pcm16Chunk) => session.sendAudio(pcm16Chunk),
+ *     onLevel: (rms) => setMeter(rms),
+ *   });
  */
+export interface MicCaptureHandlers {
+  onChunk: (pcm16: ArrayBuffer) => void;
+  onLevel?: (rms: number) => void;
+}
+
 export class MicCapture {
   private stream: MediaStream | null = null;
   private ctx: AudioContext | null = null;
@@ -14,7 +20,7 @@ export class MicCapture {
   private sink: GainNode | null = null;
   private chunkCount = 0;
 
-  async start(onChunk: (pcm16: ArrayBuffer) => void): Promise<void> {
+  async start(handlers: MicCaptureHandlers): Promise<void> {
     if (this.ctx) return;
 
     this.stream = await navigator.mediaDevices.getUserMedia({
@@ -26,8 +32,6 @@ export class MicCapture {
       },
     });
 
-    // Some Safari builds lock at 48 kHz regardless of constraint; downsample
-    // happens in the worklet anyway.
     this.ctx = new AudioContext();
     if (this.ctx.state === "suspended") await this.ctx.resume();
 
@@ -38,30 +42,34 @@ export class MicCapture {
       processorOptions: { targetRate: 16000 },
     });
     this.node.port.onmessage = (e) => {
-      this.chunkCount++;
-      if (this.chunkCount === 1) {
-        // eslint-disable-next-line no-console
-        console.log(
-          "[MicCapture] first chunk delivered",
-          (e.data as ArrayBuffer).byteLength,
-          "bytes",
-        );
+      const data = e.data as
+        | { kind: "audio"; buffer: ArrayBuffer }
+        | { kind: "level"; level: number };
+      if (data.kind === "audio") {
+        this.chunkCount++;
+        if (this.chunkCount === 1) {
+          // eslint-disable-next-line no-console
+          console.log(
+            "[MicCapture] first chunk delivered",
+            data.buffer.byteLength,
+            "bytes",
+          );
+        }
+        handlers.onChunk(data.buffer);
+      } else if (data.kind === "level") {
+        handlers.onLevel?.(data.level);
       }
-      onChunk(e.data as ArrayBuffer);
     };
 
     // CRITICAL: AudioWorkletNode.process() only runs when the node has a
-    // downstream consumer. Without this, Safari (and sometimes Chrome under
-    // load) silently never calls the processor. Route through a muted gain
-    // so we don't actually monitor the mic to the speakers.
+    // downstream consumer. Route through a muted gain so we don't actually
+    // monitor the mic to the speakers.
     this.sink = this.ctx.createGain();
     this.sink.gain.value = 0;
     src.connect(this.node);
     this.node.connect(this.sink);
     this.sink.connect(this.ctx.destination);
 
-    // Belt-and-braces: a fresh resume after the graph is wired (some
-    // mobile browsers re-suspend on getUserMedia transitions).
     if (this.ctx.state === "suspended") await this.ctx.resume();
   }
 

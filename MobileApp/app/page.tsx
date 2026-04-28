@@ -2,21 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-function friendlyError(e: unknown): string {
-  if (e instanceof DOMException) {
-    if (e.name === "NotFoundError") {
-      return "No microphone detected. Mac mini has no built-in mic — connect AirPods, a USB mic, or test on a phone.";
-    }
-    if (e.name === "NotAllowedError") {
-      return "Microphone access blocked. Check the page's mic permission and macOS Settings → Privacy → Microphone.";
-    }
-    if (e.name === "NotReadableError") {
-      return "Microphone is busy in another app. Close apps that may be holding the mic and try again.";
-    }
-  }
-  return e instanceof Error ? e.message : String(e);
-}
-
 import { ArtworkPicker } from "@/components/ArtworkPicker";
 import {
   PushToTalkButton,
@@ -35,29 +20,56 @@ import {
   type ServerEvent,
 } from "@/lib/voice-session";
 
+const STORAGE_KEY = "asu-museum:selected-artwork";
+
+function friendlyError(e: unknown): string {
+  if (e instanceof DOMException) {
+    if (e.name === "NotFoundError") {
+      return "No microphone detected. Connect AirPods, a USB mic, or test on a phone.";
+    }
+    if (e.name === "NotAllowedError") {
+      return "Microphone access blocked. Check the page's mic permission and macOS Settings → Privacy → Microphone.";
+    }
+    if (e.name === "NotReadableError") {
+      return "Microphone is busy in another app. Close apps that may be holding the mic and try again.";
+    }
+  }
+  return e instanceof Error ? e.message : String(e);
+}
+
 export default function Page() {
   const [artworks, setArtworks] = useState<ArtworkInfo[]>([]);
+  const [artworksLoading, setArtworksLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [state, setState] = useState<TalkState>("idle");
   const [transcript, setTranscript] = useState("");
   const [errMsg, setErrMsg] = useState<string | null>(null);
+  const [micLevel, setMicLevel] = useState(0);
 
   const sessionRef = useRef<VoiceSession | null>(null);
   const captureRef = useRef<MicCapture | null>(null);
   const playerRef = useRef<StreamingPlayer | null>(null);
   const turnStartedRef = useRef(false);
 
-  // Load the artwork registry once at boot.
+  // --- Boot: load artworks + restore last-selected from localStorage. ---
   useEffect(() => {
     let cancelled = false;
     fetchArtworks()
       .then((list) => {
         if (cancelled) return;
         setArtworks(list);
-        if (list.length > 0) {
-          // Pick the alphabetically first artwork as the default —
-          // matches the picker's default sort so the visitor isn't
-          // confused by "selected" being mid-list at boot.
+        setArtworksLoading(false);
+
+        // Prefer the last-used artwork if still in the list; else fall back
+        // to alphabetical first.
+        const stored =
+          typeof window !== "undefined"
+            ? window.localStorage.getItem(STORAGE_KEY)
+            : null;
+        const restored = stored && list.find((a) => a.id === stored)?.id;
+        if (restored) {
+          setSelectedId(restored);
+        } else if (list.length > 0) {
           const first = [...list].sort((a, b) =>
             a.title.localeCompare(b.title, undefined, { sensitivity: "base" }),
           )[0];
@@ -66,12 +78,20 @@ export default function Page() {
       })
       .catch((e: Error) => {
         if (cancelled) return;
+        setArtworksLoading(false);
         setErrMsg(`Couldn't load artworks: ${e.message}. Backend at ${BACKEND_BASE_URL}?`);
       });
     return () => {
       cancelled = true;
     };
   }, []);
+
+  // Persist selection so refreshes don't drop the visitor's place.
+  useEffect(() => {
+    if (selectedId && typeof window !== "undefined") {
+      window.localStorage.setItem(STORAGE_KEY, selectedId);
+    }
+  }, [selectedId]);
 
   // Tear down on unmount.
   useEffect(() => {
@@ -82,8 +102,8 @@ export default function Page() {
     };
   }, []);
 
-  // When the visitor changes artwork, reset the session — system instruction
-  // is bound at connect time, so a fresh socket gets the right artwork line.
+  // Reset session when the artwork changes — system instruction is bound
+  // at connect time, so a fresh socket gets the right artwork line.
   useEffect(() => {
     if (sessionRef.current) {
       sessionRef.current.close();
@@ -121,10 +141,6 @@ export default function Page() {
           case "error":
             setErrMsg(evt.message);
             setState("error");
-            // Close the dead session so the next press creates a fresh one.
-            // Without this, ensureConnected() short-circuits because
-            // sessionRef.current is still set, and the retry uses a broken
-            // socket.
             sessionRef.current?.close();
             sessionRef.current = null;
             break;
@@ -144,27 +160,31 @@ export default function Page() {
   }, [selectedId]);
 
   const handlePressStart = useCallback(async () => {
-    // If we're recovering from an error, blow away whatever stale session
-    // ref is hanging around so ensureConnected() actually reconnects.
+    // Recover from prior error: drop stale session so we reconnect cleanly.
     if (state === "error") {
       sessionRef.current?.close();
       sessionRef.current = null;
     }
     setErrMsg(null);
+    // Cut off any in-flight playback the moment the visitor speaks (true
+    // barge-in: works whether we were idle, speaking, or thinking).
+    playerRef.current?.flush();
     setTranscript("");
-    setState("listening");
     try {
       await ensureConnected();
-      // Cut off any in-flight audio playback the moment the visitor speaks.
-      playerRef.current?.flush();
+      setState("listening");
+
+      sessionRef.current?.startTurn();
 
       const cap = new MicCapture();
       captureRef.current = cap;
       turnStartedRef.current = true;
-      await cap.start((chunk) => sessionRef.current?.sendAudio(chunk));
+      await cap.start({
+        onChunk: (chunk) => sessionRef.current?.sendAudio(chunk),
+        onLevel: (rms) => setMicLevel(rms),
+      });
     } catch (e) {
-      const friendly = friendlyError(e);
-      setErrMsg(friendly);
+      setErrMsg(friendlyError(e));
       setState("error");
       sessionRef.current?.close();
       sessionRef.current = null;
@@ -180,25 +200,51 @@ export default function Page() {
       // ignore
     }
     captureRef.current = null;
+    setMicLevel(0);
     sessionRef.current?.endTurn();
     setState("thinking");
   }, []);
 
-  const handleInterrupt = useCallback(() => {
-    // Visitor tapped the button while Gemini was speaking. Drop queued
-    // audio so the next utterance doesn't play over their next question.
-    playerRef.current?.flush();
-    setState("idle");
-  }, []);
+  // --- Desktop convenience: hold space bar to talk. ---
+  useEffect(() => {
+    const isTypingTarget = (t: EventTarget | null) =>
+      t instanceof HTMLElement &&
+      (t.tagName === "INPUT" ||
+        t.tagName === "TEXTAREA" ||
+        t.isContentEditable);
+
+    const onDown = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || e.repeat) return;
+      if (isTypingTarget(e.target)) return;
+      if (!selectedId) return;
+      e.preventDefault();
+      handlePressStart();
+    };
+    const onUp = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      if (isTypingTarget(e.target)) return;
+      handlePressEnd();
+    };
+    window.addEventListener("keydown", onDown);
+    window.addEventListener("keyup", onUp);
+    return () => {
+      window.removeEventListener("keydown", onDown);
+      window.removeEventListener("keyup", onUp);
+    };
+  }, [handlePressStart, handlePressEnd, selectedId]);
 
   const currentArtwork = useMemo(
     () => artworks.find((x) => x.id === selectedId) ?? null,
     [artworks, selectedId],
   );
 
+  // The button is disabled while the system is mid-response (thinking) so
+  // the visitor doesn't accidentally queue duplicate turns. Listening and
+  // speaking remain interactive (release / barge-in respectively).
+  const buttonDisabled = !selectedId || state === "connecting" || state === "thinking";
+
   return (
     <div className="min-h-[100dvh] flex flex-col">
-      {/* Sticky header — keeps current artwork name visible while scrolling. */}
       <header className="sticky top-0 z-10 bg-cream/90 backdrop-blur border-b border-clay/15 px-5 pt-5 pb-3">
         <div className="max-w-md mx-auto">
           <p className="text-[10px] uppercase tracking-[0.2em] text-clay">
@@ -216,10 +262,9 @@ export default function Page() {
         </div>
       </header>
 
-      {/* Scrollable content. Bottom padding leaves room for the action bar. */}
-      <main className="flex-1 px-5 pt-4 pb-44 max-w-md mx-auto w-full">
+      <main className="flex-1 px-5 pt-4 pb-48 max-w-md mx-auto w-full">
         <section className="mb-5">
-          <TranscriptStream text={transcript} />
+          <TranscriptStream text={transcript} state={state} />
         </section>
 
         <section>
@@ -227,6 +272,7 @@ export default function Page() {
             artworks={artworks}
             selectedId={selectedId}
             onSelect={setSelectedId}
+            loading={artworksLoading}
           />
         </section>
 
@@ -237,15 +283,14 @@ export default function Page() {
         )}
       </main>
 
-      {/* Sticky bottom action bar — talk button always reachable. */}
-      <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-cream via-cream/95 to-cream/0 pt-6 pb-2 safe-bottom">
+      <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-cream via-cream/95 to-cream/0 pt-6 pb-3 safe-bottom">
         <div className="max-w-md mx-auto flex justify-center">
           <PushToTalkButton
             state={state}
-            disabled={!selectedId}
+            level={micLevel}
+            disabled={buttonDisabled}
             onPressStart={handlePressStart}
             onPressEnd={handlePressEnd}
-            onInterrupt={handleInterrupt}
           />
         </div>
       </div>

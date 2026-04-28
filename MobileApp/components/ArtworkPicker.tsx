@@ -10,6 +10,7 @@ export interface ArtworkPickerProps {
   artworks: ArtworkInfo[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  loading?: boolean;
 }
 
 function parseYear(year: string | null | undefined): number {
@@ -23,9 +24,26 @@ export function ArtworkPicker({
   artworks,
   selectedId,
   onSelect,
+  loading = false,
 }: ArtworkPickerProps) {
   const [sortMode, setSortMode] = useState<SortMode>("title");
   const [filter, setFilter] = useState("");
+
+  if (loading && artworks.length === 0) {
+    return (
+      <div className="grid grid-cols-1 gap-2">
+        {[0, 1, 2, 3].map((i) => (
+          <div
+            key={i}
+            className="rounded-2xl border border-clay/15 px-4 py-3"
+          >
+            <div className="skeleton h-5 w-2/3 rounded" />
+            <div className="skeleton h-3 w-1/3 rounded mt-2" />
+          </div>
+        ))}
+      </div>
+    );
+  }
 
   const sorted = useMemo(() => {
     const list = [...artworks];

@@ -21,6 +21,10 @@ from retrieval import retrieve
 from vector_store import VectorStore
 
 log = logging.getLogger("voice_session")
+if not log.handlers:
+    # Attach to root so uvicorn picks it up at startup-set level. INFO so
+    # we can see turn boundaries during development without --log-level debug.
+    log.setLevel(logging.INFO)
 
 SYSTEM_INSTRUCTION = """You are a warm, knowledgeable museum educator guiding a visitor through the Carmen Lomas Garza exhibition at the ASU Museum.
 
@@ -102,6 +106,11 @@ async def run_voice_session(
 
     system_instruction = SYSTEM_INSTRUCTION.format(artwork_line=artwork_line)
 
+    # Push-to-talk = manual VAD. We tell Gemini exactly when the visitor's
+    # utterance starts and ends with activity_start / activity_end signals
+    # below. Without this, Gemini's automatic VAD has to guess turn
+    # boundaries and we have to send audio_stream_end=True on release —
+    # which terminates the entire input stream after the first turn.
     config = gtypes.LiveConnectConfig(
         response_modalities=[gtypes.Modality.AUDIO],
         system_instruction=gtypes.Content(
@@ -114,20 +123,38 @@ async def run_voice_session(
         ),
         tools=[RETRIEVE_TOOL],
         output_audio_transcription=gtypes.AudioTranscriptionConfig(),
+        realtime_input_config=gtypes.RealtimeInputConfig(
+            automatic_activity_detection=gtypes.AutomaticActivityDetection(
+                disabled=True,
+            ),
+        ),
     )
 
     client = genai.Client(api_key=api_key)
 
     async with client.aio.live.connect(model=model, config=config) as session:
         await ws.send_json({"type": "ready", "artwork_id": artwork_id})
+        log.info("voice session ready (artwork=%s, model=%s)", artwork_id, model)
+
+        turn_idx = 0
+        chunk_count = 0
 
         async def pump_browser_to_gemini():
-            """Forward mic audio + control messages from browser to Gemini."""
+            """Forward mic audio + control messages from browser to Gemini.
+
+            Push-to-talk turn boundaries:
+              - {type: "start_turn"} → activity_start (visitor pressed button)
+              - audio chunks         → relayed verbatim
+              - {type: "end_turn"}   → activity_end (visitor released button)
+            """
+            nonlocal turn_idx, chunk_count
             while True:
                 msg = await ws.receive()
                 if msg["type"] == "websocket.disconnect":
+                    log.info("[turn %d] browser disconnected", turn_idx)
                     break
                 if "bytes" in msg and msg["bytes"] is not None:
+                    chunk_count += 1
                     await session.send_realtime_input(
                         audio=gtypes.Blob(
                             data=msg["bytes"], mime_type="audio/pcm;rate=16000"
@@ -138,12 +165,23 @@ async def run_voice_session(
                         ctrl = json.loads(msg["text"])
                     except json.JSONDecodeError:
                         continue
-                    if ctrl.get("type") == "end_turn":
-                        # Visitor released push-to-talk. Tell Gemini the input
-                        # stream has ended for this turn — it will commit and
-                        # respond. (For full-duplex, omit this and let VAD do
-                        # the work.)
-                        await session.send_realtime_input(audio_stream_end=True)
+                    kind = ctrl.get("type")
+                    if kind == "start_turn":
+                        turn_idx += 1
+                        chunk_count = 0
+                        log.info("[turn %d] start_turn → activity_start", turn_idx)
+                        await session.send_realtime_input(
+                            activity_start=gtypes.ActivityStart()
+                        )
+                    elif kind == "end_turn":
+                        log.info(
+                            "[turn %d] end_turn → activity_end (after %d audio chunks)",
+                            turn_idx,
+                            chunk_count,
+                        )
+                        await session.send_realtime_input(
+                            activity_end=gtypes.ActivityEnd()
+                        )
 
         async def pump_gemini_to_browser():
             """Forward audio + tool calls + transcripts from Gemini to browser."""
@@ -154,6 +192,11 @@ async def run_voice_session(
                     for fc in response.tool_call.function_calls:
                         if fc.name == "retrieve_chunks":
                             q = (fc.args or {}).get("query", "") or ""
+                            log.info(
+                                "[turn %d] tool_call retrieve_chunks(%r)",
+                                turn_idx,
+                                q,
+                            )
                             result = retrieve(
                                 store=store,
                                 registry=registry,
@@ -201,7 +244,10 @@ async def run_voice_session(
                     )
 
                 if sc.turn_complete:
+                    log.info("[turn %d] turn_complete", turn_idx)
                     await ws.send_json({"type": "turn_complete"})
+                if getattr(sc, "interrupted", False):
+                    log.info("[turn %d] interrupted by visitor", turn_idx)
 
         # Run both pumps concurrently. Whichever finishes first cancels the other.
         try:

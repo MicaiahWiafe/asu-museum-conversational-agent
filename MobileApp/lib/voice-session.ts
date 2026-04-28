@@ -79,8 +79,14 @@ export class VoiceSession {
     if (this.opened && this.ws) this.ws.send(pcm16);
   }
 
+  startTurn(): void {
+    if (this.opened && this.ws)
+      this.ws.send(JSON.stringify({ type: "start_turn" }));
+  }
+
   endTurn(): void {
-    if (this.opened && this.ws) this.ws.send(JSON.stringify({ type: "end_turn" }));
+    if (this.opened && this.ws)
+      this.ws.send(JSON.stringify({ type: "end_turn" }));
   }
 
   close(): void {
