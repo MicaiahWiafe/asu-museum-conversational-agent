@@ -29,21 +29,10 @@ export function ArtworkPicker({
   const [sortMode, setSortMode] = useState<SortMode>("title");
   const [filter, setFilter] = useState("");
 
-  if (loading && artworks.length === 0) {
-    return (
-      <div className="grid grid-cols-1 gap-2">
-        {[0, 1, 2, 3].map((i) => (
-          <div
-            key={i}
-            className="rounded-2xl border border-clay/15 px-4 py-3"
-          >
-            <div className="skeleton h-5 w-2/3 rounded" />
-            <div className="skeleton h-3 w-1/3 rounded mt-2" />
-          </div>
-        ))}
-      </div>
-    );
-  }
+  // NOTE: all hooks must run on every render. The skeleton branch below
+  // is rendered AFTER all hook calls — never before — to satisfy the
+  // Rules of Hooks. (Earlier this returned early before useMemo, which
+  // tripped React's "rendered more hooks than during the previous render".)
 
   const sorted = useMemo(() => {
     const list = [...artworks];
@@ -78,6 +67,22 @@ export function ArtworkPicker({
         (a.year ?? "").toLowerCase().includes(q),
     );
   }, [sorted, filter]);
+
+  if (loading && artworks.length === 0) {
+    return (
+      <div className="grid grid-cols-1 gap-2">
+        {[0, 1, 2, 3].map((i) => (
+          <div
+            key={i}
+            className="rounded-2xl border border-clay/15 px-4 py-3"
+          >
+            <div className="skeleton h-5 w-2/3 rounded" />
+            <div className="skeleton h-3 w-1/3 rounded mt-2" />
+          </div>
+        ))}
+      </div>
+    );
+  }
 
   if (artworks.length === 0) {
     return (
