@@ -135,6 +135,9 @@ export default function Page() {
         switch (evt.type) {
           case "ready":
             break;
+          case "heartbeat":
+            // Server-side keepalive — no UI effect.
+            break;
           case "transcript":
             setTranscript((t) => t + evt.text);
             setState("speaking");

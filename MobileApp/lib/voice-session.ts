@@ -16,6 +16,7 @@ export type ServerEvent =
   | { type: "tool_call"; name: string; query: string; chunks: string[] }
   | { type: "transcript"; text: string }
   | { type: "turn_complete" }
+  | { type: "heartbeat" }
   | { type: "error"; message: string };
 
 export interface VoiceSessionHandlers {
