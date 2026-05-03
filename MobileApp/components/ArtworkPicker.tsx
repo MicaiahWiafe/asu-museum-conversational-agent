@@ -11,6 +11,7 @@ export interface ArtworkPickerProps {
   selectedId: string | null;
   onSelect: (id: string) => void;
   loading?: boolean;
+  onOpenCamera?: () => void;
 }
 
 function parseYear(year: string | null | undefined): number {
@@ -25,6 +26,7 @@ export function ArtworkPicker({
   selectedId,
   onSelect,
   loading = false,
+  onOpenCamera,
 }: ArtworkPickerProps) {
   const [sortMode, setSortMode] = useState<SortMode>("title");
   const [filter, setFilter] = useState("");
@@ -95,6 +97,17 @@ export function ArtworkPicker({
 
   return (
     <div>
+      {onOpenCamera && (
+        <button
+          type="button"
+          onClick={onOpenCamera}
+          className="w-full mb-3 flex items-center justify-center gap-2 rounded-2xl border border-terracotta/30 bg-terracotta/10 text-terracotta px-4 py-3 font-medium active:bg-terracotta/15"
+        >
+          <CameraGlyph />
+          <span>Identify by camera</span>
+        </button>
+      )}
+
       <div className="flex items-center justify-between mb-3 gap-2">
         <input
           type="text"
@@ -161,5 +174,24 @@ export function ArtworkPicker({
         )}
       </div>
     </div>
+  );
+}
+
+function CameraGlyph() {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+      <circle cx="12" cy="13" r="4" />
+    </svg>
   );
 }

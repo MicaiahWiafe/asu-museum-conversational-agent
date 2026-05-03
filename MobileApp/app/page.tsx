@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ArtworkPicker } from "@/components/ArtworkPicker";
+import { CameraIdentifier } from "@/components/CameraIdentifier";
 import {
   PushToTalkButton,
   type TalkState,
@@ -45,6 +46,7 @@ export default function Page() {
   const [transcript, setTranscript] = useState("");
   const [errMsg, setErrMsg] = useState<string | null>(null);
   const [micLevel, setMicLevel] = useState(0);
+  const [cameraOpen, setCameraOpen] = useState(false);
 
   const sessionRef = useRef<VoiceSession | null>(null);
   const captureRef = useRef<MicCapture | null>(null);
@@ -313,6 +315,7 @@ export default function Page() {
             selectedId={selectedId}
             onSelect={setSelectedId}
             loading={artworksLoading}
+            onOpenCamera={() => setCameraOpen(true)}
           />
         </section>
 
@@ -334,6 +337,16 @@ export default function Page() {
           />
         </div>
       </div>
+
+      <CameraIdentifier
+        open={cameraOpen}
+        artworks={artworks}
+        onClose={() => setCameraOpen(false)}
+        onSelect={(id) => {
+          setSelectedId(id);
+          setCameraOpen(false);
+        }}
+      />
     </div>
   );
 }

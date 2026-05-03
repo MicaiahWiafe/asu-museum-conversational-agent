@@ -8,10 +8,13 @@ from fastapi.staticfiles import StaticFiles
 
 from artwork_registry import ArtworkRegistry
 from config import Settings, get_settings
+from identification import decode_b64_image, identify_artwork
 from models import (
     ArtworkInfo,
     ArtworksResponse,
     HealthResponse,
+    IdentifyRequest,
+    IdentifyResponse,
     QueryRequest,
     QueryResponse,
     RetrieveRequest,
@@ -215,6 +218,41 @@ def list_artworks(
             )
             for a in registry.all()
         ]
+    )
+
+
+@app.post("/identify-artwork", response_model=IdentifyResponse)
+def identify(
+    body: IdentifyRequest,
+    settings: Settings = Depends(get_settings),
+    registry: ArtworkRegistry = Depends(get_artwork_registry),
+) -> IdentifyResponse:
+    """One-shot artwork identification from a phone-camera photo. Uses
+    Gemini Vision (NOT the Live model) for cost and latency. Returns a
+    matched artwork_id (snake_case) or null if no candidate is a confident
+    match.
+    """
+    if not settings.gemini_api_key:
+        raise HTTPException(status_code=503, detail="GEMINI_API_KEY not set")
+    try:
+        image_bytes = decode_b64_image(body.image_base64)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid base64 image: {exc}")
+    try:
+        result = identify_artwork(
+            api_key=settings.gemini_api_key,
+            model=settings.gemini_vision_model,
+            registry=registry,
+            image_jpeg_bytes=image_bytes,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"identification failed: {exc}"
+        )
+    return IdentifyResponse(
+        artwork_id=result.artwork_id,
+        confidence=result.confidence,
+        reason=result.reason,
     )
 
 
