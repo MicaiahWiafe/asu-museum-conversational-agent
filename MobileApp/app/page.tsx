@@ -184,6 +184,16 @@ export default function Page() {
     playerRef.current?.flush();
     setTranscript("");
 
+    // Fresh Live session per voice turn. Multi-turn within a single Live
+    // session is unreliable on the current preview models — second-turn
+    // input often never receives a response. We close + reopen here so
+    // every press lands on a clean session. Loses cross-turn memory; the
+    // system instruction nudges Gemini to invite follow-ups without
+    // assuming context, and visitors can re-state if needed.
+    const stale = sessionRef.current;
+    sessionRef.current = null;
+    stale?.close();
+
     try {
       // Phase 1 — open the WebSocket. May take a few hundred ms first time.
       await ensureConnected();
@@ -196,13 +206,14 @@ export default function Page() {
 
       // Phase 2 — open the turn. From this point on, we owe Gemini a
       // matching activity_end no matter what.
-      sessionRef.current?.startTurn();
+      (sessionRef.current as VoiceSession | null)?.startTurn();
 
       // Phase 3 — wire the mic. getUserMedia + AudioWorklet load can race
       // with a fast release; check before flipping turnStarted=true.
       const cap = new MicCapture();
       await cap.start({
-        onChunk: (chunk) => sessionRef.current?.sendAudio(chunk),
+        onChunk: (chunk) =>
+          (sessionRef.current as VoiceSession | null)?.sendAudio(chunk),
         onLevel: (rms) => setMicLevel(rms),
       });
       if (!isPressingRef.current) {
@@ -214,7 +225,7 @@ export default function Page() {
           /* ignore */
         }
         setMicLevel(0);
-        sessionRef.current?.endTurn();
+        (sessionRef.current as VoiceSession | null)?.endTurn();
         setState("thinking");
         return;
       }
@@ -223,7 +234,7 @@ export default function Page() {
     } catch (e) {
       setErrMsg(friendlyError(e));
       setState("error");
-      sessionRef.current?.close();
+      (sessionRef.current as VoiceSession | null)?.close();
       sessionRef.current = null;
     }
   }, [ensureConnected, state]);
@@ -346,7 +357,7 @@ export default function Page() {
         </div>
       </header>
 
-      <main className="flex-1 px-5 pt-4 pb-48 max-w-md mx-auto w-full">
+      <main className="flex-1 px-5 pt-4 pb-72 max-w-md mx-auto w-full">
         <section className="mb-5">
           <TranscriptStream text={transcript} state={state} />
         </section>
