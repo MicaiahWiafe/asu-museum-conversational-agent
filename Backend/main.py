@@ -110,10 +110,17 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="AR Gallery Conversational Agent", lifespan=lifespan)
 
 _settings = get_settings()
+# CORS: when allow_origins contains "*", we MUST disable allow_credentials —
+# browsers reject responses that have allow_credentials:true with a wildcard
+# (or with a missing allow_origin header, which is what FastAPI emits in
+# that combination). Our API doesn't use cookies, so credentials=False is
+# correct and unblocks tunnel-served origins like *.trycloudflare.com.
+_cors_origins = _settings.cors_origins_list
+_cors_allow_credentials = "*" not in _cors_origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_settings.cors_origins_list,
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

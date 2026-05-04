@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 
 export type TalkState =
   | "idle"
@@ -69,11 +69,13 @@ export function PushToTalkButton({
     onPressEnd();
   };
 
-  // If the state machine externally falls back to idle/error mid-press
-  // (e.g. server error), drop the armed flag so the next press starts fresh.
-  useEffect(() => {
-    if (state !== "listening" && state !== "thinking") armed.current = false;
-  }, [state]);
+  // armed is managed purely by pointer events (down/up/cancel/leave).
+  // It used to be reset whenever `state` left "listening"/"thinking",
+  // but the state machine briefly passes through "connecting" mid-press
+  // (during ensureConnected) — clearing armed there let pointerdown fire
+  // onPressStart a SECOND time on the same physical press, producing
+  // duplicate activity_start / activity_end pairs and crashing the
+  // Gemini Live session with a keepalive timeout.
 
   const isListening = state === "listening";
   const isThinking = state === "thinking";

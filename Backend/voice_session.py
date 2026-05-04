@@ -13,13 +13,25 @@ Multi-turn invariants:
     WebSocket. Conversation history (every prior user audio + every prior
     model response) is part of the session's context, so follow-up
     questions like "tell me more" or "how does that compare?" naturally
-    work — we don't need to re-prime anything between turns.
-  * Manual VAD is enabled. Each push-to-talk press is one `activity_start`
-    → audio chunks → `activity_end` cycle. The session stays open across
-    cycles.
-  * A 20-second backend → browser heartbeat keeps the WebSocket alive
+    work for VOICE turns.
+  * Auto VAD. The model decides where utterances begin and end based on
+    silence detection. Manual VAD with activity_start/activity_end
+    signals was tried first (cleaner push-to-talk semantics) but
+    interacted badly with the preview models — duplicate signals could
+    crash the session with a keepalive ping timeout.
+  * A 10-second backend → browser heartbeat keeps the WebSocket alive
     through any idle-timeout proxies (notably Cloudflare quick tunnels,
     which 524 idle WS after ~100s).
+
+KNOWN ISSUES:
+  * Multi-turn TEXT within a single session is flaky as of Gemini Live's
+    current preview models (gemini-2.5-flash-native-audio-latest and
+    gemini-3.1-flash-live-preview, May 2026). Turn 1 text via
+    send_realtime_input(text=...) works; turn 2 text in the same session
+    sometimes never receives a response. Voice multi-turn is fine. As a
+    workaround for now, the frontend can close + reopen the WebSocket on
+    each text submission (sacrificing per-text memory but guaranteeing
+    a response). Voice barge-in to text or vice-versa is also rough.
 """
 from __future__ import annotations
 
@@ -35,11 +47,20 @@ from retrieval import retrieve
 from vector_store import VectorStore
 
 log = logging.getLogger("voice_session")
-if not log.handlers:
-    log.setLevel(logging.INFO)
+log.setLevel(logging.INFO)
+# Propagate up to uvicorn's root logger so messages appear alongside the
+# request log lines. Without an explicit handler the logger's INFO records
+# would be filtered by the default WARNING root level.
+if not log.handlers and not any(
+    isinstance(h, logging.StreamHandler) for h in logging.getLogger().handlers
+):
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s [voice_session] %(message)s"))
+    log.addHandler(_h)
+log.propagate = True
 
 
-HEARTBEAT_INTERVAL_SEC = 20.0
+HEARTBEAT_INTERVAL_SEC = 10.0
 
 
 SYSTEM_INSTRUCTION = """You are a warm, knowledgeable museum educator guiding a visitor through the Carmen Lomas Garza exhibition at the ASU Museum.
@@ -48,11 +69,15 @@ The visitor is currently in front of: {artwork_line}.
 
 Speak conversationally — short, clear sentences, the way a real educator would speak aloud. Two to four sentences per turn unless the visitor asks for more depth. You can pause, breathe, and respond to interruptions naturally.
 
-This is a continuing conversation. You remember every previous question the visitor has asked and every answer you have given in this session. Treat each new utterance as a follow-up. When they say things like "tell me more about that", "what about it", "and what does that mean?", "how does this compare to what we just discussed", "earlier you mentioned…", trust your own memory of recent turns instead of asking them to repeat themselves. Pick up the thread. Reference what was said when it matters.
+LANGUAGE: Respond in the language the visitor uses. If they speak or type in Spanish, answer in Spanish. English in, English out. The same applies to French, Portuguese, Mandarin, or any other language Gemini supports — match the visitor's language for that turn. If they switch languages mid-conversation, switch with them on the next turn. When the visitor uses a Spanish word or phrase inside an otherwise-English sentence (very common at this exhibition), keep the Spanish word and translate or gloss it briefly the first time.
 
-Ground every factual claim in retrieved context. Whenever the visitor asks about an artwork's meaning, history, technique, or the artist herself, call the `retrieve_chunks` tool first with a focused query, then weave the retrieved facts into your spoken answer. If retrieval returns nothing relevant, say so honestly rather than improvising. You can chain a follow-up retrieval if you realize the first query missed the point.
+INPUT MODE: The visitor can either speak (push-to-talk) or type. Treat typed and spoken questions identically; both should get a spoken answer in the same language as the input.
 
-Pronounce Spanish words and names with care — *tamalada*, *curandera*, *cumpleaños*, *Carmen Lomas Garza* — and translate or paraphrase Spanish terms when they're likely unfamiliar.
+CONTINUITY: This is a continuing conversation. You remember every previous question the visitor has asked and every answer you have given in this session. Treat each new utterance as a follow-up. When they say "tell me more about that", "what about it", "and what does that mean?", "how does this compare to what we just discussed", "earlier you mentioned…", trust your own memory of recent turns instead of asking them to repeat themselves. Pick up the thread.
+
+GROUNDING: Ground every factual claim in retrieved context. Whenever the visitor asks about an artwork's meaning, history, technique, or the artist herself, call the `retrieve_chunks` tool first with a focused query (English query is fine even if the visitor asks in another language — the knowledge base is in English). Weave the retrieved facts into your spoken answer in the visitor's language. If retrieval returns nothing relevant, say so honestly rather than improvising.
+
+PRONUNCIATION: Pronounce Spanish words and names with care — *tamalada*, *curandera*, *cumpleaños*, *Carmen Lomas Garza* — and translate or paraphrase Spanish terms when they're likely unfamiliar to a non-Spanish speaker.
 
 Do not invent dates, dimensions, owners, or biographical details. If you're unsure, say "I'm not certain about that" rather than guess.
 """
@@ -122,8 +147,14 @@ async def run_voice_session(
     artwork_line = _artwork_line_for(registry, artwork_id)
     system_instruction = SYSTEM_INSTRUCTION.format(artwork_line=artwork_line)
 
-    # Push-to-talk = manual VAD. Each utterance is bounded by an explicit
-    # activity_start ... activity_end pair below.
+    # Auto VAD (default). Earlier we tried manual VAD with activity_start/
+    # activity_end signals because push-to-talk has crisp turn boundaries,
+    # but that path crashed the Gemini Live session on the SECOND turn
+    # whenever text and voice were mixed (the SDK explicitly warns against
+    # interleaving send_client_content with send_realtime_input). Auto VAD
+    # commits a turn after ~500ms of silence at the end of the visitor's
+    # utterance — slightly more latency than manual VAD, but rock-solid
+    # multi-turn behavior across both modalities.
     config = gtypes.LiveConnectConfig(
         response_modalities=[gtypes.Modality.AUDIO],
         system_instruction=gtypes.Content(
@@ -136,11 +167,6 @@ async def run_voice_session(
         ),
         tools=[RETRIEVE_TOOL],
         output_audio_transcription=gtypes.AudioTranscriptionConfig(),
-        realtime_input_config=gtypes.RealtimeInputConfig(
-            automatic_activity_detection=gtypes.AutomaticActivityDetection(
-                disabled=True,
-            ),
-        ),
     )
 
     client = genai.Client(api_key=api_key)
@@ -187,28 +213,50 @@ async def run_voice_session(
                         continue
                     kind = ctrl.get("type")
                     if kind == "start_turn":
+                        # Auto VAD: no activity_start needed — Gemini detects
+                        # speech on its own. Track the boundary for logging
+                        # and per-turn timing only.
                         state["turn_idx"] += 1
                         state["chunk_count"] = 0
                         state["released_at"] = None
                         state["first_byte_at"] = None
                         state["first_tool_call_at"] = None
-                        log.info(
-                            "[turn %d] start_turn → activity_start",
-                            state["turn_idx"],
-                        )
-                        await session.send_realtime_input(
-                            activity_start=gtypes.ActivityStart()
-                        )
+                        log.info("[turn %d] start_turn (push)", state["turn_idx"])
                     elif kind == "end_turn":
+                        # Visitor released the button. Auto VAD's silence
+                        # detection commits ~500ms after we stop sending
+                        # audio chunks (which the browser already did when
+                        # MicCapture.stop ran).
                         state["released_at"] = time.monotonic()
                         log.info(
-                            "[turn %d] end_turn → activity_end (after %d audio chunks)",
+                            "[turn %d] end_turn (release, after %d audio chunks)",
                             state["turn_idx"],
                             state["chunk_count"],
                         )
-                        await session.send_realtime_input(
-                            activity_end=gtypes.ActivityEnd()
+                    elif kind == "text_turn":
+                        text = (ctrl.get("text") or "").strip()
+                        if not text:
+                            continue
+                        state["turn_idx"] += 1
+                        state["chunk_count"] = 0
+                        state["released_at"] = time.monotonic()
+                        state["first_byte_at"] = None
+                        state["first_tool_call_at"] = None
+                        log.info(
+                            "[turn %d] text_turn (%d chars): %r",
+                            state["turn_idx"],
+                            len(text),
+                            text[:120] + ("…" if len(text) > 120 else ""),
                         )
+                        # send_realtime_input(text=...) is the path that
+                        # reliably triggers generation. send_client_content
+                        # silently fails to produce output on the
+                        # gemini-3.1-flash-live-preview model and on
+                        # gemini-2.5-flash-native-audio-latest after a
+                        # tool_call cycle. Multi-turn TEXT in the SAME
+                        # session is currently flaky regardless of method —
+                        # see KNOWN ISSUES at the top of this file.
+                        await session.send_realtime_input(text=text)
 
         async def pump_gemini_to_browser():
             """Forward audio + tool calls + transcripts from Gemini to browser."""

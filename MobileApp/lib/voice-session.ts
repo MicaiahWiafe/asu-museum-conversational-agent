@@ -90,6 +90,18 @@ export class VoiceSession {
       this.ws.send(JSON.stringify({ type: "end_turn" }));
   }
 
+  /**
+   * Submit a typed question. Lands in the same Gemini Live session as
+   * voice turns, so conversation memory carries across modalities.
+   * The model will respond with spoken audio just like for a voice turn.
+   */
+  sendText(text: string): void {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (this.opened && this.ws)
+      this.ws.send(JSON.stringify({ type: "text_turn", text: trimmed }));
+  }
+
   close(): void {
     this.opened = false;
     this.ws?.close();

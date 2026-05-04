@@ -8,6 +8,7 @@ import {
   PushToTalkButton,
   type TalkState,
 } from "@/components/PushToTalkButton";
+import { TextInput } from "@/components/TextInput";
 import { TranscriptStream } from "@/components/TranscriptStream";
 import {
   BACKEND_BASE_URL,
@@ -245,6 +246,44 @@ export default function Page() {
     setState("thinking");
   }, []);
 
+  const handleTextSubmit = useCallback(
+    async (text: string) => {
+      if (!selectedId) return;
+      setErrMsg(null);
+      // Cut off any in-flight playback (barge-in via text) so the new
+      // question doesn't compete with a previous half-finished answer.
+      playerRef.current?.flush();
+      // Show the typed question in the transcript area so the visitor
+      // sees their own input — Gemini's spoken reply will append below.
+      setTranscript(`“${text}”\n\n`);
+
+      // Close any existing session so each text submission gets a fresh
+      // Live session. Multi-turn text in the same session is unreliable
+      // on the current Live preview models — turn 2's text never
+      // generates a response. Fresh-session-per-text guarantees a reply
+      // at the cost of cross-text memory. Voice turns keep their own
+      // persistent session and full memory.
+      const stale = sessionRef.current;
+      sessionRef.current = null;
+      stale?.close();
+
+      try {
+        await ensureConnected();
+        // ensureConnected re-assigns sessionRef.current. Cast explicitly
+        // to defeat TS's narrowing through the prior null write earlier
+        // in this function.
+        (sessionRef.current as VoiceSession | null)?.sendText(text);
+        setState("thinking");
+      } catch (e) {
+        setErrMsg(friendlyError(e));
+        setState("error");
+        (sessionRef.current as VoiceSession | null)?.close();
+        sessionRef.current = null;
+      }
+    },
+    [ensureConnected, selectedId],
+  );
+
   // The button is disabled while the system is mid-response ("thinking")
   // so the visitor doesn't accidentally queue duplicate turns. NOT disabled
   // during "connecting" — the press is already in flight by then, and
@@ -330,7 +369,7 @@ export default function Page() {
       </main>
 
       <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-cream via-cream/95 to-cream/0 pt-6 pb-3 safe-bottom">
-        <div className="max-w-md mx-auto flex justify-center">
+        <div className="max-w-md mx-auto flex flex-col items-center gap-3">
           <PushToTalkButton
             state={state}
             level={micLevel}
@@ -338,6 +377,12 @@ export default function Page() {
             onPressStart={handlePressStart}
             onPressEnd={handlePressEnd}
           />
+          <div className="w-full px-5">
+            <TextInput
+              disabled={!selectedId || state === "thinking"}
+              onSubmit={handleTextSubmit}
+            />
+          </div>
         </div>
       </div>
 
