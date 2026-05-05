@@ -217,16 +217,19 @@ export default function Page() {
         onLevel: (rms) => setMicLevel(rms),
       });
       if (!isPressingRef.current) {
-        // Released during mic setup. Tear down silently and commit the
-        // (mostly empty) turn so Gemini's session state stays consistent.
+        // Released BEFORE mic capture wired up — typically because the
+        // press was shorter than the ~500ms getUserMedia + worklet load
+        // takes on phones. No audio was sent to Gemini, so there's
+        // nothing to "think" about: drop straight back to idle so the
+        // visitor can immediately try a longer hold. Going to "thinking"
+        // here would disable the button and trap them.
         try {
           await cap.stop();
         } catch {
           /* ignore */
         }
         setMicLevel(0);
-        (sessionRef.current as VoiceSession | null)?.endTurn();
-        setState("thinking");
+        setState("idle");
         return;
       }
       captureRef.current = cap;

@@ -29,8 +29,8 @@ const LABELS: Record<TalkState, string> = {
 };
 
 const HINTS: Record<TalkState, string> = {
-  idle: "Press and hold · release to send",
-  connecting: "",
+  idle: "Hold for ~1 second, ask, then release",
+  connecting: "Setting up mic…",
   listening: "Release when you're done",
   thinking: "",
   speaking: "Hold to cut off and ask a follow-up",
