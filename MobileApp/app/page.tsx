@@ -19,8 +19,13 @@ import { MicCapture } from "@/lib/audio-capture";
 import { StreamingPlayer } from "@/lib/audio-playback";
 import {
   VoiceSession,
+  type ConversationTurn,
   type ServerEvent,
 } from "@/lib/voice-session";
+
+// Cap historical turns we replay on each new session. Each turn replayed
+// is one extra send_client_content call to Gemini Live — keep it small.
+const MAX_HISTORY_TURNS = 8;
 
 const STORAGE_KEY = "asu-museum:selected-artwork";
 
@@ -58,6 +63,16 @@ export default function Page() {
   // up, so it can tear down whatever it set up instead of leaving the app
   // stuck listening forever.
   const isPressingRef = useRef(false);
+
+  // Conversation history we replay on each fresh Gemini Live session
+  // (one per turn). Keeps the visitor's experience continuous instead
+  // of cold-starting on every press.
+  const historyRef = useRef<ConversationTurn[]>([]);
+  // Buffers for the in-flight turn — committed to history when Gemini
+  // emits turn_complete. pendingUser is set by either typing
+  // (handleTextSubmit) or by the input_transcript event (voice).
+  const pendingUserRef = useRef<string>("");
+  const pendingModelRef = useRef<string>("");
 
   // --- Boot: load artworks + restore last-selected from localStorage. ---
   useEffect(() => {
@@ -112,6 +127,9 @@ export default function Page() {
 
   // Reset session when the artwork changes — system instruction is bound
   // at connect time, so a fresh socket gets the right artwork line.
+  // Also reset conversation history; cross-artwork memory would confuse
+  // Gemini's grounding (the model sees a system prompt bound to one
+  // artwork but history mentioning a different one).
   useEffect(() => {
     if (sessionRef.current) {
       sessionRef.current.close();
@@ -120,6 +138,9 @@ export default function Page() {
     playerRef.current?.flush();
     setTranscript("");
     setErrMsg(null);
+    historyRef.current = [];
+    pendingUserRef.current = "";
+    pendingModelRef.current = "";
   }, [selectedId]);
 
   const ensureConnected = useCallback(async () => {
@@ -139,13 +160,35 @@ export default function Page() {
           case "heartbeat":
             // Server-side keepalive — no UI effect.
             break;
+          case "input_transcript":
+            // Visitor's voice, transcribed by Gemini. Accumulate into the
+            // pending-user buffer so we can fold it into history once
+            // the model finishes responding.
+            pendingUserRef.current += evt.text;
+            break;
           case "transcript":
+            pendingModelRef.current += evt.text;
             setTranscript((t) => t + evt.text);
             setState("speaking");
             break;
-          case "turn_complete":
+          case "turn_complete": {
+            // Commit this exchange to history so the next session opens
+            // with the conversation already threaded.
+            const u = pendingUserRef.current.trim();
+            const m = pendingModelRef.current.trim();
+            if (u) historyRef.current.push({ role: "user", text: u });
+            if (m) historyRef.current.push({ role: "model", text: m });
+            // Cap history length.
+            if (historyRef.current.length > MAX_HISTORY_TURNS) {
+              historyRef.current = historyRef.current.slice(
+                -MAX_HISTORY_TURNS,
+              );
+            }
+            pendingUserRef.current = "";
+            pendingModelRef.current = "";
             setState("idle");
             break;
+          }
           case "tool_call":
             setState("thinking");
             break;
@@ -166,7 +209,7 @@ export default function Page() {
         );
       },
     });
-    await session.connect(selectedId);
+    await session.connect(selectedId, historyRef.current);
     sessionRef.current = session;
   }, [selectedId]);
 
@@ -183,6 +226,11 @@ export default function Page() {
     // barge-in: works whether we were idle, speaking, or thinking).
     playerRef.current?.flush();
     setTranscript("");
+    // Reset per-turn buffers; input_transcript will fill pendingUser as
+    // the visitor speaks, transcript will fill pendingModel as Gemini
+    // replies.
+    pendingUserRef.current = "";
+    pendingModelRef.current = "";
 
     // Fresh Live session per voice turn. Multi-turn within a single Live
     // session is unreliable on the current preview models — second-turn
@@ -281,6 +329,12 @@ export default function Page() {
       sessionRef.current = null;
       stale?.close();
 
+      // Seed the pending-user buffer so this typed question gets folded
+      // into history when Gemini finishes responding (no
+      // input_transcript event for typed input — there's no audio to
+      // transcribe).
+      pendingUserRef.current = text;
+      pendingModelRef.current = "";
       try {
         await ensureConnected();
         // ensureConnected re-assigns sessionRef.current. Cast explicitly

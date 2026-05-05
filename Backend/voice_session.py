@@ -73,7 +73,7 @@ LANGUAGE: Respond in the language the visitor uses. If they speak or type in Spa
 
 INPUT MODE: The visitor can either speak (push-to-talk) or type. Treat typed and spoken questions identically; both should get a spoken answer in the same language as the input.
 
-CONTINUITY: This is a continuing conversation. You remember every previous question the visitor has asked and every answer you have given in this session. Treat each new utterance as a follow-up. When they say "tell me more about that", "what about it", "and what does that mean?", "how does this compare to what we just discussed", "earlier you mentioned…", trust your own memory of recent turns instead of asking them to repeat themselves. Pick up the thread.
+CONTINUITY: You are mid-conversation. Any prior turns you can see — questions the visitor asked and answers you gave — happened moments ago and are part of this same flowing discussion. Treat each new utterance as a follow-up. When the visitor says "tell me more about that", "what about it", "how does this compare to what we just discussed", or "earlier you mentioned…", pick up the thread without asking them to repeat themselves. Don't reintroduce the painting or the artist on every turn — assume they're still in front of the same work and you've already been chatting. Vary your phrasing across turns; if you used a particular word or framing in the last answer, try a different angle this time so the conversation doesn't feel repetitive.
 
 GROUNDING: Ground every factual claim in retrieved context. Whenever the visitor asks about an artwork's meaning, history, technique, or the artist herself, call the `retrieve_chunks` tool first with a focused query (English query is fine even if the visitor asks in another language — the knowledge base is in English). Weave the retrieved facts into your spoken answer in the visitor's language. If retrieval returns nothing relevant, say so honestly rather than improvising.
 
@@ -147,6 +147,14 @@ async def run_voice_session(
     artwork_line = _artwork_line_for(registry, artwork_id)
     system_instruction = SYSTEM_INSTRUCTION.format(artwork_line=artwork_line)
 
+    # Conversation history sent by the client. Each item is
+    # {role: "user" | "model", text: "..."}. We use this to PRIME the
+    # fresh Gemini Live session so the visitor doesn't feel like every
+    # turn starts from scratch. Capped at the most recent 8 entries to
+    # keep priming cheap.
+    history_in: list[dict] = setup.get("history") or []
+    history_in = history_in[-8:]
+
     # Auto VAD (default). Earlier we tried manual VAD with activity_start/
     # activity_end signals because push-to-talk has crisp turn boundaries,
     # but that path crashed the Gemini Live session on the SECOND turn
@@ -167,6 +175,11 @@ async def run_voice_session(
         ),
         tools=[RETRIEVE_TOOL],
         output_audio_transcription=gtypes.AudioTranscriptionConfig(),
+        # Transcribe the visitor's voice input too. The frontend uses
+        # this to thread the conversation back into history for the next
+        # session, so voice turns can build on prior voice turns
+        # naturally.
+        input_audio_transcription=gtypes.AudioTranscriptionConfig(),
     )
 
     client = genai.Client(api_key=api_key)
@@ -181,6 +194,29 @@ async def run_voice_session(
     }
 
     async with client.aio.live.connect(model=model, config=config) as session:
+        # Prime the session with prior conversation so the visitor's new
+        # turn lands in a continuing thread, not a cold start. Each
+        # historical entry is sent as a non-committing client_content
+        # turn (turn_complete=False); the actual new input below
+        # commits and triggers generation.
+        for entry in history_in:
+            role = "model" if entry.get("role") == "model" else "user"
+            text = (entry.get("text") or "").strip()
+            if not text:
+                continue
+            try:
+                await session.send_client_content(
+                    turns=gtypes.Content(
+                        role=role, parts=[gtypes.Part(text=text)]
+                    ),
+                    turn_complete=False,
+                )
+            except Exception as exc:
+                log.warning("history priming failed: %s", exc)
+                break
+        if history_in:
+            log.info("primed session with %d history turn(s)", len(history_in))
+
         await ws.send_json({"type": "ready", "artwork_id": artwork_id})
         log.info("voice session ready (artwork=%s, model=%s)", artwork_id, model)
 
@@ -343,6 +379,20 @@ async def run_voice_session(
                         {
                             "type": "transcript",
                             "text": sc.output_transcription.text,
+                        }
+                    )
+
+                if (
+                    getattr(sc, "input_transcription", None)
+                    and sc.input_transcription.text
+                ):
+                    # The visitor's voice, transcribed. Frontend folds
+                    # this into the conversation history for the next
+                    # session's priming.
+                    await ws.send_json(
+                        {
+                            "type": "input_transcript",
+                            "text": sc.input_transcription.text,
                         }
                     )
 
