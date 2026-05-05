@@ -111,6 +111,7 @@ Defined verbatim in [Backend/models.py](Backend/models.py:1).
 GET  /health                                                  → { status, vector_store, llm }
 GET  /artworks                                                → { artworks: [...] }
 POST /retrieve { query, artwork_id?, k? }                     → { chunks: [...] }
+POST /identify-artwork { image_base64 }                       → { artwork_id, confidence, reason }
 ```
 
 **Mobile path:**

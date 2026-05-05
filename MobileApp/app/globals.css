@@ -10,7 +10,6 @@ body {
   overscroll-behavior-y: none;
 }
 
-/* iOS PWA: respect the home-bar safe area on the bottom action bar. */
 .safe-bottom {
   padding-bottom: max(env(safe-area-inset-bottom, 0px), 0.5rem);
 }
@@ -23,7 +22,38 @@ body {
     box-shadow: 0 0 0 18px rgba(199, 91, 58, 0);
   }
 }
-
 .pulse-talk {
   animation: pulse-talk 1.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Bouncing dots — used in the "thinking" state to show liveness. */
+@keyframes dot-bounce {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+  40% { transform: translateY(-4px); opacity: 1; }
+}
+.dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: currentColor;
+  animation: dot-bounce 1.2s infinite;
+}
+.dot:nth-child(2) { animation-delay: 0.15s; }
+.dot:nth-child(3) { animation-delay: 0.3s; }
+
+/* Shimmer for skeleton loaders. */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(154, 110, 80, 0.06) 0%,
+    rgba(154, 110, 80, 0.18) 50%,
+    rgba(154, 110, 80, 0.06) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s infinite ease-in-out;
 }

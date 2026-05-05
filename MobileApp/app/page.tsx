@@ -2,10 +2,37 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { ArtworkPicker } from "@/components/ArtworkPicker";
+import { CameraIdentifier } from "@/components/CameraIdentifier";
+import {
+  PushToTalkButton,
+  type TalkState,
+} from "@/components/PushToTalkButton";
+import { TextInput } from "@/components/TextInput";
+import { TranscriptStream } from "@/components/TranscriptStream";
+import {
+  BACKEND_BASE_URL,
+  fetchArtworks,
+  type ArtworkInfo,
+} from "@/lib/api";
+import { MicCapture } from "@/lib/audio-capture";
+import { StreamingPlayer } from "@/lib/audio-playback";
+import {
+  VoiceSession,
+  type ConversationTurn,
+  type ServerEvent,
+} from "@/lib/voice-session";
+
+// Cap historical turns we replay on each new session. Each turn replayed
+// is one extra send_client_content call to Gemini Live — keep it small.
+const MAX_HISTORY_TURNS = 8;
+
+const STORAGE_KEY = "asu-museum:selected-artwork";
+
 function friendlyError(e: unknown): string {
   if (e instanceof DOMException) {
     if (e.name === "NotFoundError") {
-      return "No microphone detected. Mac mini has no built-in mic — connect AirPods, a USB mic, or test on a phone.";
+      return "No microphone detected. Connect AirPods, a USB mic, or test on a phone.";
     }
     if (e.name === "NotAllowedError") {
       return "Microphone access blocked. Check the page's mic permission and macOS Settings → Privacy → Microphone.";
@@ -17,47 +44,55 @@ function friendlyError(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-import { ArtworkPicker } from "@/components/ArtworkPicker";
-import {
-  PushToTalkButton,
-  type TalkState,
-} from "@/components/PushToTalkButton";
-import { TranscriptStream } from "@/components/TranscriptStream";
-import {
-  BACKEND_BASE_URL,
-  fetchArtworks,
-  type ArtworkInfo,
-} from "@/lib/api";
-import { MicCapture } from "@/lib/audio-capture";
-import { StreamingPlayer } from "@/lib/audio-playback";
-import {
-  VoiceSession,
-  type ServerEvent,
-} from "@/lib/voice-session";
-
 export default function Page() {
   const [artworks, setArtworks] = useState<ArtworkInfo[]>([]);
+  const [artworksLoading, setArtworksLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [state, setState] = useState<TalkState>("idle");
   const [transcript, setTranscript] = useState("");
   const [errMsg, setErrMsg] = useState<string | null>(null);
+  const [micLevel, setMicLevel] = useState(0);
+  const [cameraOpen, setCameraOpen] = useState(false);
 
   const sessionRef = useRef<VoiceSession | null>(null);
   const captureRef = useRef<MicCapture | null>(null);
   const playerRef = useRef<StreamingPlayer | null>(null);
   const turnStartedRef = useRef(false);
+  // True between handlePressStart and handlePressEnd. Lets the (async)
+  // start path detect a release that arrived before mic capture was wired
+  // up, so it can tear down whatever it set up instead of leaving the app
+  // stuck listening forever.
+  const isPressingRef = useRef(false);
 
-  // Load the artwork registry once at boot.
+  // Conversation history we replay on each fresh Gemini Live session
+  // (one per turn). Keeps the visitor's experience continuous instead
+  // of cold-starting on every press.
+  const historyRef = useRef<ConversationTurn[]>([]);
+  // Buffers for the in-flight turn — committed to history when Gemini
+  // emits turn_complete. pendingUser is set by either typing
+  // (handleTextSubmit) or by the input_transcript event (voice).
+  const pendingUserRef = useRef<string>("");
+  const pendingModelRef = useRef<string>("");
+
+  // --- Boot: load artworks + restore last-selected from localStorage. ---
   useEffect(() => {
     let cancelled = false;
     fetchArtworks()
       .then((list) => {
         if (cancelled) return;
         setArtworks(list);
-        if (list.length > 0) {
-          // Pick the alphabetically first artwork as the default —
-          // matches the picker's default sort so the visitor isn't
-          // confused by "selected" being mid-list at boot.
+        setArtworksLoading(false);
+
+        // Prefer the last-used artwork if still in the list; else fall back
+        // to alphabetical first.
+        const stored =
+          typeof window !== "undefined"
+            ? window.localStorage.getItem(STORAGE_KEY)
+            : null;
+        const restored = stored && list.find((a) => a.id === stored)?.id;
+        if (restored) {
+          setSelectedId(restored);
+        } else if (list.length > 0) {
           const first = [...list].sort((a, b) =>
             a.title.localeCompare(b.title, undefined, { sensitivity: "base" }),
           )[0];
@@ -66,12 +101,20 @@ export default function Page() {
       })
       .catch((e: Error) => {
         if (cancelled) return;
+        setArtworksLoading(false);
         setErrMsg(`Couldn't load artworks: ${e.message}. Backend at ${BACKEND_BASE_URL}?`);
       });
     return () => {
       cancelled = true;
     };
   }, []);
+
+  // Persist selection so refreshes don't drop the visitor's place.
+  useEffect(() => {
+    if (selectedId && typeof window !== "undefined") {
+      window.localStorage.setItem(STORAGE_KEY, selectedId);
+    }
+  }, [selectedId]);
 
   // Tear down on unmount.
   useEffect(() => {
@@ -82,8 +125,11 @@ export default function Page() {
     };
   }, []);
 
-  // When the visitor changes artwork, reset the session — system instruction
-  // is bound at connect time, so a fresh socket gets the right artwork line.
+  // Reset session when the artwork changes — system instruction is bound
+  // at connect time, so a fresh socket gets the right artwork line.
+  // Also reset conversation history; cross-artwork memory would confuse
+  // Gemini's grounding (the model sees a system prompt bound to one
+  // artwork but history mentioning a different one).
   useEffect(() => {
     if (sessionRef.current) {
       sessionRef.current.close();
@@ -92,6 +138,9 @@ export default function Page() {
     playerRef.current?.flush();
     setTranscript("");
     setErrMsg(null);
+    historyRef.current = [];
+    pendingUserRef.current = "";
+    pendingModelRef.current = "";
   }, [selectedId]);
 
   const ensureConnected = useCallback(async () => {
@@ -108,23 +157,44 @@ export default function Page() {
         switch (evt.type) {
           case "ready":
             break;
+          case "heartbeat":
+            // Server-side keepalive — no UI effect.
+            break;
+          case "input_transcript":
+            // Visitor's voice, transcribed by Gemini. Accumulate into the
+            // pending-user buffer so we can fold it into history once
+            // the model finishes responding.
+            pendingUserRef.current += evt.text;
+            break;
           case "transcript":
+            pendingModelRef.current += evt.text;
             setTranscript((t) => t + evt.text);
             setState("speaking");
             break;
-          case "turn_complete":
+          case "turn_complete": {
+            // Commit this exchange to history so the next session opens
+            // with the conversation already threaded.
+            const u = pendingUserRef.current.trim();
+            const m = pendingModelRef.current.trim();
+            if (u) historyRef.current.push({ role: "user", text: u });
+            if (m) historyRef.current.push({ role: "model", text: m });
+            // Cap history length.
+            if (historyRef.current.length > MAX_HISTORY_TURNS) {
+              historyRef.current = historyRef.current.slice(
+                -MAX_HISTORY_TURNS,
+              );
+            }
+            pendingUserRef.current = "";
+            pendingModelRef.current = "";
             setState("idle");
             break;
+          }
           case "tool_call":
             setState("thinking");
             break;
           case "error":
             setErrMsg(evt.message);
             setState("error");
-            // Close the dead session so the next press creates a fresh one.
-            // Without this, ensureConnected() short-circuits because
-            // sessionRef.current is still set, and the retry uses a broken
-            // socket.
             sessionRef.current?.close();
             sessionRef.current = null;
             break;
@@ -139,39 +209,92 @@ export default function Page() {
         );
       },
     });
-    await session.connect(selectedId);
+    await session.connect(selectedId, historyRef.current);
     sessionRef.current = session;
   }, [selectedId]);
 
   const handlePressStart = useCallback(async () => {
-    // If we're recovering from an error, blow away whatever stale session
-    // ref is hanging around so ensureConnected() actually reconnects.
+    isPressingRef.current = true;
+
+    // Recover from prior error: drop stale session so we reconnect cleanly.
     if (state === "error") {
       sessionRef.current?.close();
       sessionRef.current = null;
     }
     setErrMsg(null);
+    // Cut off any in-flight playback the moment the visitor speaks (true
+    // barge-in: works whether we were idle, speaking, or thinking).
+    playerRef.current?.flush();
     setTranscript("");
-    setState("listening");
-    try {
-      await ensureConnected();
-      // Cut off any in-flight audio playback the moment the visitor speaks.
-      playerRef.current?.flush();
+    // Reset per-turn buffers; input_transcript will fill pendingUser as
+    // the visitor speaks, transcript will fill pendingModel as Gemini
+    // replies.
+    pendingUserRef.current = "";
+    pendingModelRef.current = "";
 
+    // Fresh Live session per voice turn. Multi-turn within a single Live
+    // session is unreliable on the current preview models — second-turn
+    // input often never receives a response. We close + reopen here so
+    // every press lands on a clean session. Loses cross-turn memory; the
+    // system instruction nudges Gemini to invite follow-ups without
+    // assuming context, and visitors can re-state if needed.
+    const stale = sessionRef.current;
+    sessionRef.current = null;
+    stale?.close();
+
+    try {
+      // Phase 1 — open the WebSocket. May take a few hundred ms first time.
+      await ensureConnected();
+      if (!isPressingRef.current) {
+        // Released before the socket was ready. Nothing was sent to Gemini
+        // yet (no startTurn), so just bail.
+        return;
+      }
+      setState("listening");
+
+      // Phase 2 — open the turn. From this point on, we owe Gemini a
+      // matching activity_end no matter what.
+      (sessionRef.current as VoiceSession | null)?.startTurn();
+
+      // Phase 3 — wire the mic. getUserMedia + AudioWorklet load can race
+      // with a fast release; check before flipping turnStarted=true.
       const cap = new MicCapture();
+      await cap.start({
+        onChunk: (chunk) =>
+          (sessionRef.current as VoiceSession | null)?.sendAudio(chunk),
+        onLevel: (rms) => setMicLevel(rms),
+      });
+      if (!isPressingRef.current) {
+        // Released BEFORE mic capture wired up — typically because the
+        // press was shorter than the ~500ms getUserMedia + worklet load
+        // takes on phones. No audio was sent to Gemini, so there's
+        // nothing to "think" about: drop straight back to idle so the
+        // visitor can immediately try a longer hold. Going to "thinking"
+        // here would disable the button and trap them.
+        try {
+          await cap.stop();
+        } catch {
+          /* ignore */
+        }
+        setMicLevel(0);
+        setState("idle");
+        return;
+      }
       captureRef.current = cap;
       turnStartedRef.current = true;
-      await cap.start((chunk) => sessionRef.current?.sendAudio(chunk));
     } catch (e) {
-      const friendly = friendlyError(e);
-      setErrMsg(friendly);
+      setErrMsg(friendlyError(e));
       setState("error");
-      sessionRef.current?.close();
+      (sessionRef.current as VoiceSession | null)?.close();
       sessionRef.current = null;
     }
   }, [ensureConnected, state]);
 
   const handlePressEnd = useCallback(async () => {
+    isPressingRef.current = false;
+    // If the start path is still mid-setup, it will see the cleared
+    // isPressingRef on its next checkpoint and tear itself down. Nothing
+    // for us to do here.
     if (!turnStartedRef.current) return;
     turnStartedRef.current = false;
     try {
@@ -180,16 +303,92 @@ export default function Page() {
       // ignore
     }
     captureRef.current = null;
+    setMicLevel(0);
     sessionRef.current?.endTurn();
     setState("thinking");
   }, []);
 
-  const handleInterrupt = useCallback(() => {
-    // Visitor tapped the button while Gemini was speaking. Drop queued
-    // audio so the next utterance doesn't play over their next question.
-    playerRef.current?.flush();
-    setState("idle");
-  }, []);
+  const handleTextSubmit = useCallback(
+    async (text: string) => {
+      if (!selectedId) return;
+      setErrMsg(null);
+      // Cut off any in-flight playback (barge-in via text) so the new
+      // question doesn't compete with a previous half-finished answer.
+      playerRef.current?.flush();
+      // Show the typed question in the transcript area so the visitor
+      // sees their own input — Gemini's spoken reply will append below.
+      setTranscript(`“${text}”\n\n`);
+
+      // Close any existing session so each text submission gets a fresh
+      // Live session. Multi-turn text in the same session is unreliable
+      // on the current Live preview models — turn 2's text never
+      // generates a response. Fresh-session-per-text guarantees a reply
+      // at the cost of cross-text memory. Voice turns keep their own
+      // persistent session and full memory.
+      const stale = sessionRef.current;
+      sessionRef.current = null;
+      stale?.close();
+
+      // Seed the pending-user buffer so this typed question gets folded
+      // into history when Gemini finishes responding (no
+      // input_transcript event for typed input — there's no audio to
+      // transcribe).
+      pendingUserRef.current = text;
+      pendingModelRef.current = "";
+      try {
+        await ensureConnected();
+        // ensureConnected re-assigns sessionRef.current. Cast explicitly
+        // to defeat TS's narrowing through the prior null write earlier
+        // in this function.
+        (sessionRef.current as VoiceSession | null)?.sendText(text);
+        setState("thinking");
+      } catch (e) {
+        setErrMsg(friendlyError(e));
+        setState("error");
+        (sessionRef.current as VoiceSession | null)?.close();
+        sessionRef.current = null;
+      }
+    },
+    [ensureConnected, selectedId],
+  );
+
+  // The button is disabled while the system is mid-response ("thinking")
+  // so the visitor doesn't accidentally queue duplicate turns. NOT disabled
+  // during "connecting" — the press is already in flight by then, and
+  // disabling would drop the matching release event in PushToTalkButton.
+  // Listening and speaking remain interactive (release / barge-in).
+  const buttonDisabled = !selectedId || state === "thinking";
+
+  // --- Desktop convenience: hold space bar to talk. ---
+  useEffect(() => {
+    const isTypingTarget = (t: EventTarget | null) =>
+      t instanceof HTMLElement &&
+      (t.tagName === "INPUT" ||
+        t.tagName === "TEXTAREA" ||
+        t.isContentEditable);
+
+    const onDown = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || e.repeat) return;
+      if (isTypingTarget(e.target)) return;
+      // Mirror the button's disabled gate. Without this, space would
+      // start a fresh turn while one is already mid-response, overlapping
+      // turns the UI explicitly prevents via pointer.
+      if (buttonDisabled) return;
+      e.preventDefault();
+      handlePressStart();
+    };
+    const onUp = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      if (isTypingTarget(e.target)) return;
+      handlePressEnd();
+    };
+    window.addEventListener("keydown", onDown);
+    window.addEventListener("keyup", onUp);
+    return () => {
+      window.removeEventListener("keydown", onDown);
+      window.removeEventListener("keyup", onUp);
+    };
+  }, [handlePressStart, handlePressEnd, buttonDisabled]);
 
   const currentArtwork = useMemo(
     () => artworks.find((x) => x.id === selectedId) ?? null,
@@ -198,7 +397,6 @@ export default function Page() {
 
   return (
     <div className="min-h-[100dvh] flex flex-col">
-      {/* Sticky header — keeps current artwork name visible while scrolling. */}
       <header className="sticky top-0 z-10 bg-cream/90 backdrop-blur border-b border-clay/15 px-5 pt-5 pb-3">
         <div className="max-w-md mx-auto">
           <p className="text-[10px] uppercase tracking-[0.2em] text-clay">
@@ -216,10 +414,9 @@ export default function Page() {
         </div>
       </header>
 
-      {/* Scrollable content. Bottom padding leaves room for the action bar. */}
-      <main className="flex-1 px-5 pt-4 pb-44 max-w-md mx-auto w-full">
+      <main className="flex-1 px-5 pt-4 pb-72 max-w-md mx-auto w-full">
         <section className="mb-5">
-          <TranscriptStream text={transcript} />
+          <TranscriptStream text={transcript} state={state} />
         </section>
 
         <section>
@@ -227,6 +424,8 @@ export default function Page() {
             artworks={artworks}
             selectedId={selectedId}
             onSelect={setSelectedId}
+            loading={artworksLoading}
+            onOpenCamera={() => setCameraOpen(true)}
           />
         </section>
 
@@ -237,18 +436,33 @@ export default function Page() {
         )}
       </main>
 
-      {/* Sticky bottom action bar — talk button always reachable. */}
-      <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-cream via-cream/95 to-cream/0 pt-6 pb-2 safe-bottom">
-        <div className="max-w-md mx-auto flex justify-center">
+      <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-cream via-cream/95 to-cream/0 pt-6 pb-3 safe-bottom">
+        <div className="max-w-md mx-auto flex flex-col items-center gap-3">
           <PushToTalkButton
             state={state}
-            disabled={!selectedId}
+            level={micLevel}
+            disabled={buttonDisabled}
             onPressStart={handlePressStart}
             onPressEnd={handlePressEnd}
-            onInterrupt={handleInterrupt}
           />
+          <div className="w-full px-5">
+            <TextInput
+              disabled={!selectedId || state === "thinking"}
+              onSubmit={handleTextSubmit}
+            />
+          </div>
         </div>
       </div>
+
+      <CameraIdentifier
+        open={cameraOpen}
+        artworks={artworks}
+        onClose={() => setCameraOpen(false)}
+        onSelect={(id) => {
+          setSelectedId(id);
+          setCameraOpen(false);
+        }}
+      />
     </div>
   );
 }

@@ -10,6 +10,8 @@ export interface ArtworkPickerProps {
   artworks: ArtworkInfo[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  loading?: boolean;
+  onOpenCamera?: () => void;
 }
 
 function parseYear(year: string | null | undefined): number {
@@ -23,9 +25,16 @@ export function ArtworkPicker({
   artworks,
   selectedId,
   onSelect,
+  loading = false,
+  onOpenCamera,
 }: ArtworkPickerProps) {
   const [sortMode, setSortMode] = useState<SortMode>("title");
   const [filter, setFilter] = useState("");
+
+  // NOTE: all hooks must run on every render. The skeleton branch below
+  // is rendered AFTER all hook calls — never before — to satisfy the
+  // Rules of Hooks. (Earlier this returned early before useMemo, which
+  // tripped React's "rendered more hooks than during the previous render".)
 
   const sorted = useMemo(() => {
     const list = [...artworks];
@@ -61,6 +70,22 @@ export function ArtworkPicker({
     );
   }, [sorted, filter]);
 
+  if (loading && artworks.length === 0) {
+    return (
+      <div className="grid grid-cols-1 gap-2">
+        {[0, 1, 2, 3].map((i) => (
+          <div
+            key={i}
+            className="rounded-2xl border border-clay/15 px-4 py-3"
+          >
+            <div className="skeleton h-5 w-2/3 rounded" />
+            <div className="skeleton h-3 w-1/3 rounded mt-2" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   if (artworks.length === 0) {
     return (
       <p className="text-clay text-sm">
@@ -72,6 +97,17 @@ export function ArtworkPicker({
 
   return (
     <div>
+      {onOpenCamera && (
+        <button
+          type="button"
+          onClick={onOpenCamera}
+          className="w-full mb-3 flex items-center justify-center gap-2 rounded-2xl border border-terracotta/30 bg-terracotta/10 text-terracotta px-4 py-3 font-medium active:bg-terracotta/15"
+        >
+          <CameraGlyph />
+          <span>Identify by camera</span>
+        </button>
+      )}
+
       <div className="flex items-center justify-between mb-3 gap-2">
         <input
           type="text"
@@ -138,5 +174,24 @@ export function ArtworkPicker({
         )}
       </div>
     </div>
+  );
+}
+
+function CameraGlyph() {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+      <circle cx="12" cy="13" r="4" />
+    </svg>
   );
 }

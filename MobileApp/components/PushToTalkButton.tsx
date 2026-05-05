@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 
 export type TalkState =
   | "idle"
@@ -12,41 +12,46 @@ export type TalkState =
 
 export interface PushToTalkButtonProps {
   state: TalkState;
+  /** 0..1 RMS — only meaningful when state === "listening". */
+  level: number;
   disabled?: boolean;
   onPressStart: () => void;
   onPressEnd: () => void;
-  onInterrupt: () => void;
 }
 
 const LABELS: Record<TalkState, string> = {
   idle: "Hold to ask",
   connecting: "Connecting…",
-  listening: "Listening…",
-  thinking: "Thinking…",
-  speaking: "Tap to interrupt",
+  listening: "Listening",
+  thinking: "Thinking",
+  speaking: "Hold to interrupt",
   error: "Tap to retry",
+};
+
+const HINTS: Record<TalkState, string> = {
+  idle: "Hold for ~1 second, ask, then release",
+  connecting: "Setting up mic…",
+  listening: "Release when you're done",
+  thinking: "",
+  speaking: "Hold to cut off and ask a follow-up",
+  error: "",
 };
 
 export function PushToTalkButton({
   state,
+  level,
   disabled,
   onPressStart,
   onPressEnd,
-  onInterrupt,
 }: PushToTalkButtonProps) {
-  // Track whether we've fired onPressStart so we always fire onPressEnd to
-  // match — necessary because pointercancel can land before pointerup if
-  // the system steals the gesture.
   const armed = useRef(false);
 
+  // Press-and-hold no matter what state we're in. The page handler decides
+  // whether this is a fresh ask, a barge-in, or a retry — by the time the
+  // user holds the button we always want to start listening to them.
   const handleDown = (e: React.PointerEvent) => {
     if (disabled) return;
     e.preventDefault();
-    // Speaking → tap interrupts (do NOT start mic capture from this tap).
-    if (state === "speaking") {
-      onInterrupt();
-      return;
-    }
     (e.target as Element).setPointerCapture?.(e.pointerId);
     if (armed.current) return;
     armed.current = true;
@@ -54,48 +59,75 @@ export function PushToTalkButton({
   };
 
   const handleUpOrCancel = (e: React.PointerEvent) => {
-    if (disabled) return;
+    // Releases must ALWAYS fire if we previously armed a press, even if
+    // the parent has since disabled the button (e.g. state flipped to
+    // "connecting" during async setup). Dropping the release here would
+    // leave the app stuck listening with no matching end_turn.
     e.preventDefault();
     if (!armed.current) return;
     armed.current = false;
     onPressEnd();
   };
 
-  useEffect(() => {
-    if (state !== "listening") armed.current = false;
-  }, [state]);
+  // armed is managed purely by pointer events (down/up/cancel/leave).
+  // It used to be reset whenever `state` left "listening"/"thinking",
+  // but the state machine briefly passes through "connecting" mid-press
+  // (during ensureConnected) — clearing armed there let pointerdown fire
+  // onPressStart a SECOND time on the same physical press, producing
+  // duplicate activity_start / activity_end pairs and crashing the
+  // Gemini Live session with a keepalive timeout.
 
   const isListening = state === "listening";
-  const ring = isListening ? "pulse-talk" : "";
+  const isThinking = state === "thinking";
+
+  // Map RMS to a 0..1 ring scale. Floor at a low threshold so quiet rooms
+  // don't show pure 0; clamp at a comfortable ceiling.
+  const meterScale = isListening
+    ? Math.min(1, Math.max(0.05, level * 6))
+    : 0;
+
   const tone =
     state === "error"
       ? "bg-clay"
       : state === "speaking"
-        ? "bg-terracotta/80"
+        ? "bg-terracotta/85"
         : "bg-terracotta active:bg-terracotta/90";
 
   return (
-    <div className="flex flex-col items-center gap-2 select-none touch-none">
-      <button
-        type="button"
-        disabled={disabled}
-        onPointerDown={handleDown}
-        onPointerUp={handleUpOrCancel}
-        onPointerCancel={handleUpOrCancel}
-        onPointerLeave={handleUpOrCancel}
-        className={[
-          "h-24 w-24 rounded-full flex items-center justify-center text-white shadow-lg",
-          "disabled:opacity-40 disabled:bg-clay",
-          tone,
-          ring,
-        ].join(" ")}
-        aria-label="Push to talk"
-      >
-        {state === "speaking" ? <StopGlyph /> : <MicGlyph />}
-      </button>
-      <div className="text-xs text-ink/70 font-medium tracking-wider uppercase">
+    <div className="flex flex-col items-center gap-1.5 select-none touch-none">
+      <div className="relative">
+        {/* Live mic-level halo — grows with RMS while listening. */}
+        {isListening && (
+          <div
+            aria-hidden
+            className="absolute inset-0 rounded-full bg-terracotta/30 transition-transform duration-75 ease-out"
+            style={{ transform: `scale(${1 + meterScale * 0.45})` }}
+          />
+        )}
+        <button
+          type="button"
+          disabled={disabled}
+          onPointerDown={handleDown}
+          onPointerUp={handleUpOrCancel}
+          onPointerCancel={handleUpOrCancel}
+          onPointerLeave={handleUpOrCancel}
+          className={[
+            "relative h-28 w-28 rounded-full flex items-center justify-center text-white shadow-lg",
+            "disabled:opacity-40 disabled:bg-clay disabled:cursor-not-allowed",
+            tone,
+            isListening ? "pulse-talk" : "",
+          ].join(" ")}
+          aria-label="Push to talk"
+        >
+          {isThinking ? <ThinkingDots /> : <MicGlyph />}
+        </button>
+      </div>
+      <div className="text-xs text-ink/80 font-medium tracking-wider uppercase mt-1">
         {LABELS[state]}
       </div>
+      {HINTS[state] && (
+        <div className="text-[11px] text-clay/80">{HINTS[state]}</div>
+      )}
     </div>
   );
 }
@@ -103,8 +135,8 @@ export function PushToTalkButton({
 function MicGlyph() {
   return (
     <svg
-      width="32"
-      height="32"
+      width="34"
+      height="34"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -121,16 +153,12 @@ function MicGlyph() {
   );
 }
 
-function StopGlyph() {
+function ThinkingDots() {
   return (
-    <svg
-      width="28"
-      height="28"
-      viewBox="0 0 24 24"
-      fill="currentColor"
-      aria-hidden="true"
-    >
-      <rect x="6" y="6" width="12" height="12" rx="2" />
-    </svg>
+    <div className="flex items-center gap-1.5 text-white" aria-hidden="true">
+      <span className="dot" />
+      <span className="dot" />
+      <span className="dot" />
+    </div>
   );
 }

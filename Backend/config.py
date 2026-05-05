@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     # prosody than half-cascade. `-latest` auto-tracks the newest preview.
     gemini_live_model: str = "gemini-2.5-flash-native-audio-latest"
     gemini_voice_name: str = "Aoede"  # warm, female, educator-leaning
+    # Vision model for one-shot artwork identification from a phone-camera
+    # photo. Cheap + fast; not the Live model.
+    gemini_vision_model: str = "gemini-2.5-flash"
 
     chroma_persist_dir: str = "./chroma_db"
     chroma_collection: str = "carmen_lomas_garza"

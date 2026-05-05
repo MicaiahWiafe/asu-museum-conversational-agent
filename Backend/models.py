@@ -81,3 +81,14 @@ class ArtworkInfo(BaseModel):
 
 class ArtworksResponse(BaseModel):
     artworks: list[ArtworkInfo] = Field(default_factory=list)
+
+
+class IdentifyRequest(BaseModel):
+    # Base64-encoded JPEG (with or without the data: URL prefix).
+    image_base64: str = Field(min_length=64)
+
+
+class IdentifyResponse(BaseModel):
+    artwork_id: Optional[str] = None  # None = "unknown / no confident match"
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str = ""
